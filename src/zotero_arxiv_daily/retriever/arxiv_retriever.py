@@ -138,7 +138,7 @@ class ArxivRetriever(BaseRetriever):
         raw_papers = []
         for paper in tqdm(client.results(search), desc="Retrieving arXiv papers"):
             if not include_cross_list and getattr(paper, "primary_category", None) not in categories:
-            continue
+                continue
 
             raw_papers.append(paper)
 
