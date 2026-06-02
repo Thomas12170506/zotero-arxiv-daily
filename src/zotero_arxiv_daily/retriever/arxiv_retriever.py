@@ -8,6 +8,8 @@ import feedparser
 from tqdm import tqdm
 import multiprocessing
 import os
+import random
+import time
 from queue import Empty
 from typing import Any, Callable, TypeVar
 from loguru import logger
@@ -114,7 +116,19 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10, delay_seconds=10)
+        request_cfg = self.config.source.arxiv.get("request", {})
+
+        initial_jitter_seconds = float(request_cfg.get("initial_jitter_seconds", 0))
+        if initial_jitter_seconds > 0:
+            sleep_seconds = random.uniform(0, initial_jitter_seconds)
+            logger.info(f"Waiting {sleep_seconds:.1f}s before querying arXiv")
+            time.sleep(sleep_seconds)
+
+        client = arxiv.Client(
+            page_size=int(request_cfg.get("page_size", 100)),
+            delay_seconds=float(request_cfg.get("delay_seconds", 15.0)),
+            num_retries=int(request_cfg.get("num_retries", 20)),
+        )
 
         categories = list(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
