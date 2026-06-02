@@ -12,6 +12,7 @@ from queue import Empty
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
+from datetime import datetime, timedelta, timezone
 
 T = TypeVar("T")
 
@@ -113,31 +114,36 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        client = arxiv.Client(page_size=10, delay_seconds=15, num_retries=20)
-        query = '+'.join(self.config.source.arxiv.category)
-        include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
-        # Get the latest paper from arxiv rss feed
-        feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
-        if 'Feed error for query' in feed.feed.title:
-            raise Exception(f"Invalid ARXIV_QUERY: {query}.")
-        raw_papers = []
-        allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
-        all_paper_ids = [
-            i.id.removeprefix("oai:arXiv.org:")
-            for i in feed.entries
-            if i.get("arxiv_announce_type", "new") in allowed_announce_types
-        ]
-        if self.config.executor.debug:
-            all_paper_ids = all_paper_ids[:10]
+        client = arxiv.Client(num_retries=10, delay_seconds=10)
 
-        # Get full information of each paper from arxiv api
-        bar = tqdm(total=len(all_paper_ids))
-        for i in range(0, len(all_paper_ids), 20):
-            search = arxiv.Search(id_list=all_paper_ids[i:i + 20])
-            batch = list(client.results(search))
-            bar.update(len(batch))
-            raw_papers.extend(batch)
-        bar.close()
+        categories = list(self.config.source.arxiv.category)
+        include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
+        lookback_days = int(self.config.source.arxiv.get("lookback_days", 1))
+        max_results = int(self.config.source.arxiv.get("max_results", 10000))
+
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=lookback_days)
+
+        category_query = " OR ".join(f"cat:{cat}" for cat in categories)
+        date_query = f"submittedDate:[{start:%Y%m%d%H%M} TO {end:%Y%m%d%H%M}]"
+        query = f"({category_query}) AND {date_query}"
+
+        search = arxiv.Search(
+            query=query,
+            max_results=max_results,
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
+
+        raw_papers = []
+        for paper in tqdm(client.results(search), desc="Retrieving arXiv papers"):
+            if not include_cross_list and getattr(paper, "primary_category", None) not in categories:
+            continue
+
+            raw_papers.append(paper)
+
+            if self.config.executor.debug and len(raw_papers) >= 10:
+                break
 
         return raw_papers
 
